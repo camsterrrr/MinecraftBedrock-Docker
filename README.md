@@ -51,19 +51,17 @@ Below we are setting up a Dockerfile, which will be used to automate the Docker 
 ```Docker
 FROM ubuntu:latest
 
-RUN mkdir /mincraftBedrock && mkdir /mincraftBedrock/serverCode && \
+RUN mkdir mincraftBedrock && mkdir mincraftBedrock/serverCode && \
     apt update && apt upgrade && \
-    apt install -y curl wget unzip openssl grep screen
+    apt install -y curl wget unzip openssl grep screen cron systemctl vim && \
+    systemctl enable cron
 
 WORKDIR /minecraftBedrock/serverCode
 
 COPY ./serverCode .
-
-RUN ls -la
+COPY ./scripts/crontab /var/spool/cron/crontabs/root
     
 EXPOSE 19132/udp 19133/udp 19132/tcp 19133/tcp
-
-CMD ["./bedrock_server"]
 ```
 
 Note that I tried making a docker image "from scratch", but running server code didn't seem possible without a file system. If I find a way to just run the binary, I will come back and update this. It would be nice to have it as lite weight as possible.
@@ -85,20 +83,60 @@ A word on Docker images: An image is an executable package that provides everyth
 Now that we have cached image, let us use `docker run` to create a docker container that will actually run the server. Note that we are outputting stdin and stderr into log files.
 
 ```BASH
-sudo docker run -d -p 19132:19132/udp -p 19133:19133/udp -p 19132:19132/tcp -p 19133:19133/tcp --name minecraft-container minecraft-image > ./logs/stdin.log 2> ./logs/stderr.log
+sudo docker run -d -v "$PWD/serverCode/worlds:/minecraftBedrock/serverCode/worlds" -p 19132:19132/udp -p 19133:19133/udp -p 19132:19132/tcp -p 19133:19133/tcp --name minecraft-container minecraft-image tail -f /dev/null
 ```
 
-A word on Docker containers: A container is a runnable instance of an image. It provides an execution environment for any packages, libraries, or configurations specified in an image. A container can be started, stopped, restarted, etc. Each container is isolated from others running on a host.
+Note that the `tail -f /dev/null` is used so that the container doesn't exit once it created. This will allow the container to run continuously.
+
+A word on Docker containers: A container is a runable instance of an image. It provides an execution environment for any packages, libraries, or configurations specified in an image. A container can be started, stopped, restarted, etc. Each container is isolated from others running on a host.
+
+## Exec docker container
+
+Now that the container is started, we need to run the server binary. I'll include additional steps that I took below, but once you issue the `docker exec` command and have a tty session, then the only thing left to do is `./bedrock_server`. 
+
+### Screen program
+
+There was an interesting program that I learned about, "screen" is a program used to open a run a continuous session with a binary. This session could be opened, closed, paused, etc. This was useful because I could run the server binary in the screen program and not push it to the back ground in any way. Prior to this program, I was having issues pushing the server to the background and issuing `docker exec` to pick up where I left off. screen made running the server very simple.
+
+```BASH
+#!/bin/bash
+
+screen -dmS minecraftBedrock
+screen -S minecraftBedrock -X stuff "^M"
+screen -S minecraftBedrock -X stuff "./bedrock_server^M"
+```
+
+Note that when `docker run` is entered, we can assume that there are no existing screen sessions.
 
 ## Backing up game files
 
-All game data seems to be store in the `serverCode/worlds/` directory, so I wrote a script that could copy data. This can be run manually as a script, or you can automate it through a systemctl service or cron job.
+When running the server binary, you can enter `save {hold|query|resume}` which will save the data of the server to the `./worlds/` directory. Since we're using a docker container, we can mount a folder from the host OS to `./worlds/` so that way game data is saved on the host OS and container. If the docker container fails, or is stopped, then we still have the data on our host OS.
+
+Out of paranoia, you can copy the backup data to a second back up location. This can be done by using the cp command.
+
+## Cron event
+
+Now, let us set up a cron even to run a script that enters the `save` commands in the server. This script will open the screen session we created in the last step and pass in the save commands. 
 
 ```BASH
-sudo docker cp minecraft-container:/minecraftBedrock/bedrockServer/worlds /home/jbone/minecraftBedrock/backups
+#!/bin/bash
+
+screen -S minecraftBedrock  -X stuff "save hold^M"
+sleep 1
+screen -S minecraftBedrock  -X stuff "save query^M"
+sleep 1
+screen -S minecraftBedrock  -X stuff "save resume^M"
 ```
 
-Note that the container must be running in order for Docker to copy files from the container.
+Additionally, on our **host** machine we will create a crontab event to run the script every 15 minutes.
+
+```cron
+*/15 * * * * docker exec minecraft-container /minecraftBedrock/serverCode/screenSave.sh >> /home/jbone/minecraftBedrock/logs/cron.log 2>&1
+```
+
+Note that the Docker container instance of Ubuntu is very stripped down, so it is small as possible. It only includes the needed packages, so there are some packages that are missing. I wasn't able to get systemctl or cron events to work on the Docker container. However, I was able to issue the script commands from my host OS.
+
+Also, note that you may need to add the "docker" to your users group, so that way the cron event doesn't need to use "sudo".
 
 ## Setting port forward
 
@@ -152,3 +190,7 @@ sudo docker run {...}
 	- --read-only, control whether container can write files.
 - -w /path/to/dir, set working directory.
 - /bin/bash, the command to run inside the container. In this case, it starts an interactive Bash shell.
+
+## References
+
+- https://pimylifeup.com/ubuntu-minecraft-bedrock-server/
