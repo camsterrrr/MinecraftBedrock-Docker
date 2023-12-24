@@ -1,0 +1,7 @@
+[Unit]
+Description=Script to backup game files
+Wants=timers.target
+
+[Service]
+Type=simple
+ExecStart=/home/mc/bedrockServer/scripts/backup.sh

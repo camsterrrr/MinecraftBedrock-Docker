@@ -1,0 +1,15 @@
+[Unit]
+Description=Minecraft Bedrock Server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/bash /home/mc/bedrockServer/scripts/start.sh
+ExecStop=/usr/bin/bash /home/mc/bedrockServer/scripts/stop.sh
+WorkingDirectory=/home/mc/bedrockServer/scripts/
+Restart=always
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+
